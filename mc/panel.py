@@ -12,17 +12,18 @@ from dataclasses import dataclass, field
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtGui import QFont, QKeyEvent
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QSplitter,
-    QTabBar, QTableView, QVBoxLayout, QWidget,
+    QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QPushButton, QSplitter, QTabBar, QTableView, QVBoxLayout, QWidget,
 )
 
-from . import archive
+from . import archive, platform
 from .config import config
 from .i18n import t
 from .fsmodel import (
     COLUMNS, COL_ATTR, COL_DATE, COL_EXT, COL_NAME, COL_SIZE, EntryDelegate, FileEntry,
     FileListModel, SORT_NAME, format_size, list_branch, list_directory,
 )
+from .ops import human
 from .viewer import QuickView
 
 MAX_HISTORY = 60
@@ -51,6 +52,63 @@ class TabState:
         return ("🔒 " if self.locked else "") + name
 
 
+class DriveBar(QWidget):
+    """Botones de unidades y espacio libre.
+
+    La usan los dos modos: una sola barra arriba de la ventana que actúa sobre
+    el panel activo, o una por panel atada a su lado. Por eso no conoce ningún
+    panel: avisa qué unidad se eligió y quien la creó decide a dónde va.
+    """
+
+    drive_clicked = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lay = QHBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(2)
+        self.info = QLabel("")
+        self.info.setObjectName("driveInfo")
+        self.buttons: list[QPushButton] = []
+        self.refresh_drives()
+
+    def refresh_drives(self) -> None:
+        """Rearma los botones. Se llama al enchufar o sacar un disco."""
+        while self._lay.count():
+            item = self._lay.takeAt(0)
+            w = item.widget()
+            if w is not None and w is not self.info:
+                w.deleteLater()
+        self.buttons.clear()
+
+        for label, path in platform.list_drives():
+            b = QPushButton(label.lower())
+            b.setObjectName("drive")
+            b.setToolTip(path)
+            # Una letra de unidad entra en 30 px; un punto de montaje de Unix no.
+            b.setFixedWidth(30 if len(label) <= 2 else min(140, 16 + 8 * len(label)))
+            b.setFocusPolicy(Qt.NoFocus)
+            b.clicked.connect(lambda _=False, p=path: self.drive_clicked.emit(p))
+            self._lay.addWidget(b)
+            self.buttons.append(b)
+
+        self._lay.addSpacing(12)
+        self._lay.addWidget(self.info)
+        self._lay.addStretch()
+
+    def set_free_space(self, path: str) -> None:
+        import shutil
+
+        try:
+            uso = shutil.disk_usage(path)
+            # `human` y no `format_size`: es el mismo texto que mostraba la
+            # barra única, y cambiarlo sería un cambio visible sin motivo.
+            self.info.setText(t("{free} libres de {total}",
+                                free=human(uso.free), total=human(uso.total)))
+        except OSError:
+            self.info.setText("")
+
+
 class FileView(QTableView):
     """La tabla. Maneja las teclas propias del panel; el resto sube a la ventana."""
 
@@ -58,6 +116,7 @@ class FileView(QTableView):
     toggle_mark_move = Signal(int)       # +1 baja, 0 no mueve
     quick_search_changed = Signal(str)
     selection_key = Signal(int, int)     # tecla, modificadores
+    context_menu_at = Signal(object, bool)   # posición global, verbos extendidos
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -81,6 +140,20 @@ class FileView(QTableView):
     def _clear_quick(self) -> None:
         self._quick = ""
         self.quick_search_changed.emit("")
+
+    def contextMenuEvent(self, event) -> None:
+        """Clic derecho: el cursor se va a la fila clickeada y sale el menú.
+
+        Con Shift aparecen los verbos extendidos, el mismo trato que da el
+        Explorador. Si el clic cae fuera de toda fila, el menú sale igual pero
+        sobre el directorio actual.
+        """
+        index = self.indexAt(event.pos())
+        if index.isValid():
+            self.setCurrentIndex(index.sibling(index.row(), 0))
+        extendido = bool(event.modifiers() & Qt.ShiftModifier)
+        self.context_menu_at.emit(event.globalPos(), extendido)
+        event.accept()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key, mods = event.key(), event.modifiers()
@@ -154,6 +227,7 @@ class Panel(QWidget):
         self.tabs: list[TabState] = []
         self.current_tab = 0
         self._loading = False
+        self._stats: tuple[int, int, int] | None = None
 
         self.model = FileListModel(self)
         self.model.dirs_first = config.get_bool("general", "sort_dirs_first", True)
@@ -161,6 +235,13 @@ class Panel(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(2)
+
+        # Barra de unidades propia del panel. Sólo se ve en el modo "dos";
+        # la ventana decide y llama a show_drive_bar().
+        self.drive_bar = DriveBar()
+        self.drive_bar.drive_clicked.connect(self._on_drive_clicked)
+        self.drive_bar.hide()
+        lay.addWidget(self.drive_bar)
 
         self.tabbar = QTabBar()
         self.tabbar.setExpanding(False)
@@ -187,6 +268,9 @@ class Panel(QWidget):
         self.view.quick_search_changed.connect(self._on_quick_search)
         self.view.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         self.view.installEventFilter(self)
+        # Las flechas las maneja QTableView por dentro, así que sin esto la
+        # barra de estado sólo se enteraba al recargar el directorio.
+        self.view.selectionModel().currentRowChanged.connect(self._on_cursor_moved)
 
         self.quick_view = QuickView()
         self.quick_view.hide()
@@ -218,6 +302,17 @@ class Panel(QWidget):
         for col, width in ((COL_EXT, 56), (COL_SIZE, 92), (COL_DATE, 118), (COL_ATTR, 46)):
             h.setSectionResizeMode(col, QHeaderView.Interactive)
             self.view.setColumnWidth(col, width)
+
+    def show_drive_bar(self, visible: bool) -> None:
+        self.drive_bar.setVisible(visible)
+        if visible:
+            self.drive_bar.set_free_space(self.path)
+
+    def _on_drive_clicked(self, path: str) -> None:
+        """Esta barra es de este panel: no hay que preguntar cuál está activo."""
+        if not self.set_path(path):
+            self.status.setText(t("No se puede acceder a {path}", path=path))
+        self.view.setFocus()
 
     def set_active(self, active: bool) -> None:
         """Resalta el panel con foco: en un commander hay que ver cuál es el origen.
@@ -451,6 +546,7 @@ class Panel(QWidget):
 
     def reload(self, restore_cursor: bool = False, select_name: str | None = None) -> None:
         self._loading = True
+        self._stats = None
         t = self.tab
         show_hidden = config.get_bool("general", "show_hidden", False)
 
@@ -479,11 +575,16 @@ class Panel(QWidget):
         self.path_edit.setText(self.current_path_display())
         self._refresh_tab_title()
         self._update_status()
+        # El espacio libre se consulta sólo al recargar, no en cada movimiento
+        # del cursor: es una llamada al sistema de archivos.
+        if self.drive_bar.isVisible():
+            self.drive_bar.set_free_space(self.path)
         self._loading = False
         self.path_changed.emit(self.current_path_display())
 
     def set_entries_override(self, entries: list[FileEntry]) -> None:
         """Volcar resultados de búsqueda en el panel (feed to listbox)."""
+        self._stats = None
         self.model.set_entries(entries)
         self.tab.marked.clear()
         self.set_cursor_row(0)
@@ -626,21 +727,71 @@ class Panel(QWidget):
                 return
         self.status.setText(t("Buscar: {text}   (sin coincidencias)", text=text))
 
+    def _on_cursor_moved(self, *_args) -> None:
+        if not self._loading:
+            self._update_status()
+
+    def _link_target_bajo_cursor(self) -> str | None:
+        """Destino del acceso directo bajo el cursor, si es uno.
+
+        Adentro de un comprimido las rutas no son del disco, así que no hay
+        nada que resolver.
+        """
+        if self.in_archive:
+            return None
+        e = self.current_entry()
+        if e is None or e.is_parent or e.is_dir:
+            return None
+        return platform.link_target(e.path)
+
+    def _listing_stats(self) -> tuple[int, int, int]:
+        """(archivos, carpetas, bytes) del listado, calculado una sola vez.
+
+        Se cachea porque la barra de estado ahora se refresca en cada
+        movimiento del cursor y no sólo al recargar: recorrer diez mil entradas
+        por cada flecha abajo se notaría. Marcar y ordenar no cambian estos
+        totales, así que sólo hay que invalidarlo al releer el directorio.
+        """
+        if self._stats is None:
+            archivos = carpetas = 0
+            total = 0
+            for e in self.model.entries:
+                if e.is_parent:
+                    continue
+                if e.is_dir:
+                    carpetas += 1
+                else:
+                    archivos += 1
+                    total += e.size
+            self._stats = (archivos, carpetas, total)
+        return self._stats
+
     def _update_status(self) -> None:
-        marked = self.model.marked_entries()
-        files = [e for e in self.model.entries if not e.is_dir and not e.is_parent]
-        dirs = [e for e in self.model.entries if e.is_dir and not e.is_parent]
-        if marked:
-            total = sum(e.size for e in marked)
+        archivos, carpetas, total = self._listing_stats()
+        hay_marcas = bool(self.model.marked)
+
+        if not hay_marcas:
+            destino = self._link_target_bajo_cursor()
+            if destino:
+                # Parado sobre un acceso directo, lo que interesa es adónde va.
+                self.status.setText(t("→ {target}", target=destino))
+                if self.quick_view.isVisible():
+                    self.quick_view.show_file(
+                        destino if os.path.isfile(destino) else None)
+                self.status_changed.emit()
+                return
+
+        if hay_marcas:
+            marked = self.model.marked_entries()
             self.status.setText(t(
                 "{m} de {n} archivo(s) marcados, {msize} de {size}",
-                m=len(marked), n=len(files), msize=format_size(total),
-                size=format_size(sum(e.size for e in files))))
+                m=len(marked), n=archivos,
+                msize=format_size(sum(e.size for e in marked)),
+                size=format_size(total)))
         else:
             self.status.setText(t(
                 "{n} archivo(s), {d} carpeta(s), {size}",
-                n=len(files), d=len(dirs),
-                size=format_size(sum(e.size for e in files))))
+                n=archivos, d=carpetas, size=format_size(total)))
         if self.quick_view.isVisible():
             e = self.current_entry()
             self.quick_view.show_file(e.path if e and not e.is_dir else None)

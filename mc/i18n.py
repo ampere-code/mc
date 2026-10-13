@@ -95,8 +95,15 @@ EN: dict[str, str] = {
     "&Oscuro": "&Dark",
     "&Claro": "&Light",
     "Alternar claro / oscuro": "Toggle light / dark",
+    "&Barra de unidades": "&Drive bar",
+    "Una en cada &panel": "One per &panel",
+    "Una &sola arriba": "A &single one on top",
+    "&Ocultarla": "&Hide it",
     "&Idioma": "&Language",
     "Borrar a la &papelera de reciclaje": "Delete to &recycle bin",
+    "Usar el menú contextual de &Windows": "Use the &Windows context menu",
+    "Muestra el menú del Explorador con todas las extensiones instaladas":
+        "Shows the Explorer menu with every installed shell extension",
     "Elegir &editor externo…": "Choose external &editor…",
     "Guardar la configuración &ahora": "&Save configuration now",
     "&Atajos de teclado": "&Keyboard shortcuts",
@@ -128,6 +135,16 @@ EN: dict[str, str] = {
     "Buscar: {text}   (sin coincidencias)": "Search: {text}   (no match)",
     "Vista rápida": "Quick view",
     "No se pudo leer: {error}": "Could not read: {error}",
+    "→ {target}": "→ {target}",
+
+    # --- menú contextual propio (el de respaldo) ---
+    "Ver (F3)": "View (F3)",
+    "Editar (F4)": "Edit (F4)",
+    "Copiar (F5)": "Copy (F5)",
+    "Mover (F6)": "Move (F6)",
+    "Renombrar (Shift+F6)": "Rename (Shift+F6)",
+    "Borrar (F8)": "Delete (F8)",
+    "Abrir en el Explorador": "Open in Explorer",
 
     # --- diálogos generales ---
     "Confirmar borrado": "Confirm delete",

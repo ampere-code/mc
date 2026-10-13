@@ -46,14 +46,16 @@ def list_zip(zip_path: str, inner: str = "") -> list[FileEntry]:
                     if head not in seen_dirs:
                         seen_dirs.add(head)
                         entries.append(FileEntry(
-                            name=head, path=f"{inner}{head}/", is_dir=True))
+                            name=head, path=f"{inner}{head}/", is_dir=True,
+                            virtual=True))
                 else:
                     try:
                         mtime = datetime(*info.date_time).timestamp()
                     except (ValueError, OverflowError):
                         mtime = 0.0
                     entries.append(FileEntry(
-                        name=head, path=name, size=info.file_size, mtime=mtime))
+                        name=head, path=name, size=info.file_size, mtime=mtime,
+                        virtual=True))
     except (OSError, zipfile.BadZipFile):
         pass
     return entries

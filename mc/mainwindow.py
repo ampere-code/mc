@@ -36,10 +36,17 @@ from .fsmodel import SORT_DATE, SORT_EXT, SORT_NAME, SORT_NONE, SORT_SIZE, forma
 from .ops import CopyMoveWorker, DeleteWorker, ProgressDialog, human, scan
 from . import i18n, platform
 from .i18n import t
-from .panel import Panel
+from .panel import DriveBar, Panel
 from .search import SearchDialog
 from . import theme
 from .viewer import Viewer
+
+try:
+    # Integración con el shell de Windows: menú contextual real y accesos
+    # directos. En Linux y macOS no existe y la aplicación usa sus alternativas.
+    from . import winshell
+except ImportError:
+    winshell = None
 
 APP_TITLE = "Marce Commander"
 
@@ -83,6 +90,15 @@ class MainWindow(QMainWindow):
             panel.path_changed.connect(self._on_path_changed)
             panel.request_open.connect(self._open_entry)
             panel.view.selection_key.connect(self._on_selection_key)
+            panel.view.context_menu_at.connect(
+                lambda pos, ext, p=panel: self._on_context_menu(p, pos, ext))
+
+        self._apply_drive_bar_mode()
+        self._vigilante_unidades = None
+        if winshell is not None:
+            # Con dos barras se nota más que un pendrive enchufado después de
+            # arrancar no aparezca: Windows avisa, hay que escucharlo.
+            self._vigilante_unidades = winshell.vigilar_unidades(self._refresh_drives)
 
         self._restore_geometry()
         self._set_active(self.left)
@@ -96,26 +112,12 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(4)
 
-        # Barra de unidades: actúa sobre el panel activo.
-        drives = QHBoxLayout()
-        drives.setSpacing(2)
-        self.drive_buttons: list[QPushButton] = []
-        for label, path in self._list_drives():
-            b = QPushButton(label.lower())
-            b.setObjectName("drive")
-            b.setToolTip(path)
-            # Una letra de unidad entra en 30 px; un punto de montaje de Unix no.
-            b.setFixedWidth(30 if len(label) <= 2 else min(140, 16 + 8 * len(label)))
-            b.setFocusPolicy(Qt.NoFocus)
-            b.clicked.connect(lambda _=False, p=path: self._goto_drive(p))
-            drives.addWidget(b)
-            self.drive_buttons.append(b)
-        drives.addSpacing(12)
-        self.drive_info = QLabel("")
-        self.drive_info.setObjectName("driveInfo")
-        drives.addWidget(self.drive_info)
-        drives.addStretch()
-        root.addLayout(drives)
+        # Barra de unidades. En modo "una" hay una sola arriba, que actúa sobre
+        # el panel activo; en modo "dos" cada panel tiene la suya y ésta no se
+        # crea. Ver _apply_drive_bar_mode().
+        self.drive_bar = DriveBar()
+        self.drive_bar.drive_clicked.connect(self._goto_drive)
+        root.addWidget(self.drive_bar)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.left)
@@ -255,6 +257,19 @@ class MainWindow(QMainWindow):
         a.triggered.connect(lambda: self.run("cm_ToggleTheme"))
         apariencia.addAction(a)
 
+        barra = apariencia.addMenu(t("&Barra de unidades"))
+        self._drive_group = QActionGroup(self)
+        modo_actual = config.get("general", "drive_bar", "dos")
+        for titulo, valor in (("Una en cada &panel", "dos"),
+                              ("Una &sola arriba", "una"),
+                              ("&Ocultarla", "no")):
+            a = QAction(t(titulo), self, checkable=True)
+            a.setData(valor)
+            a.setChecked(valor == modo_actual)
+            a.triggered.connect(lambda _=False, v=valor: self.cmd_set_drive_bar(v))
+            self._drive_group.addAction(a)
+            barra.addAction(a)
+
         idioma = m.addMenu(t("&Idioma"))
         self._lang_group = QActionGroup(self)
         current_lang = config.get("general", "language", "auto")
@@ -271,6 +286,15 @@ class MainWindow(QMainWindow):
         self.act_recycle.setChecked(config.get_bool("general", "delete_to_recycle", True))
         self.act_recycle.triggered.connect(lambda: self.run("cm_ToggleRecycle"))
         m.addAction(self.act_recycle)
+        if winshell is not None:
+            self.act_shell_menu = QAction(
+                t("Usar el menú contextual de &Windows"), self, checkable=True)
+            self.act_shell_menu.setChecked(
+                config.get_bool("general", "shell_context_menu", True))
+            self.act_shell_menu.setToolTip(
+                t("Muestra el menú del Explorador con todas las extensiones instaladas"))
+            self.act_shell_menu.triggered.connect(lambda: self.run("cm_ToggleShellMenu"))
+            m.addAction(self.act_shell_menu)
         add(m, "Elegir &editor externo…", "cm_ChooseEditor")
         add(m, "Guardar la configuración &ahora", "cm_SaveConfig")
         m.addSeparator()
@@ -420,6 +444,8 @@ class MainWindow(QMainWindow):
             "cm_FocusCmdLine": lambda: self.cmdline.setFocus(),
             "cm_AppendToCmdLine": self.cmd_append_to_cmdline,
             "cm_ToggleRecycle": self.cmd_toggle_recycle,
+            "cm_ToggleShellMenu": self.cmd_toggle_shell_menu,
+            "cm_SwitchDriveBar": self.cmd_cycle_drive_bar,
             "cm_ToggleTheme": self.cmd_toggle_theme,
             "cm_ChooseEditor": self.cmd_choose_editor,
             "cm_SaveConfig": lambda: (self._save_settings(),
@@ -471,19 +497,32 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{self.active.current_path_display()} — {APP_TITLE}")
 
     def _update_drive_info(self) -> None:
-        import shutil
+        if self.drive_bar.isVisible():
+            self.drive_bar.set_free_space(self.active.path)
 
-        try:
-            usage = shutil.disk_usage(self.active.path)
-            self.drive_info.setText(
-                t("{free} libres de {total}", free=human(usage.free), total=human(usage.total)))
-        except OSError:
-            self.drive_info.setText("")
+    # --- modo de la barra de unidades ------------------------------------
 
-    @staticmethod
-    def _list_drives() -> list[tuple[str, str]]:
-        """[(etiqueta, ruta)]. En Unix no hay letras: son puntos de montaje."""
-        return platform.list_drives()
+    def _apply_drive_bar_mode(self, modo: str | None = None) -> None:
+        """`una` arriba de todo, `dos` una por panel, `no` ninguna.
+
+        Con una sola barra hay que mirar qué panel tiene el foco antes de hacer
+        clic, que es justo la duda que la barra debería sacar; con dos, cada
+        una manda sobre su lado.
+        """
+        modo = modo or config.get("general", "drive_bar", "dos")
+        if modo not in ("una", "dos", "no"):
+            modo = "dos"
+        self.drive_bar.setVisible(modo == "una")
+        for panel in (self.left, self.right):
+            panel.show_drive_bar(modo == "dos")
+        if modo == "una":
+            self._update_drive_info()
+
+    def _refresh_drives(self) -> None:
+        """Rearma los botones: se enchufó o se sacó un disco."""
+        for barra in (self.drive_bar, self.left.drive_bar, self.right.drive_bar):
+            barra.refresh_drives()
+        self._apply_drive_bar_mode()
 
     def _goto_drive(self, path: str) -> None:
         if not self.active.set_path(path):
@@ -608,6 +647,13 @@ class MainWindow(QMainWindow):
             return
         if archive.is_archive(entry.path):
             self.active.open_archive(entry.path)
+            return
+        # Un acceso directo que apunta a una carpeta navega hasta ella, igual
+        # que en Total Commander. Si apunta a un programa, lo deja abrir al
+        # shell, que ya sabe hacerlo.
+        destino = platform.link_target(entry.path)
+        if destino and os.path.isdir(destino):
+            self.active.set_path(destino)
             return
         try:
             platform.open_with_default_app(entry.path)
@@ -1044,30 +1090,86 @@ class MainWindow(QMainWindow):
     # --- comandos: varios --------------------------------------------------
 
     def cmd_context_menu(self) -> None:
+        """Shift+F10: el menú sale debajo del archivo que tiene el cursor."""
+        view = self.active.view
+        rect = view.visualRect(view.currentIndex())
+        self._context_menu_at(view.viewport().mapToGlobal(rect.bottomLeft()), False)
+
+    def _on_context_menu(self, panel, pos, extendido: bool) -> None:
+        """Clic derecho: el panel clickeado pasa a ser el origen antes del menú."""
+        if panel is not self.active:
+            self._set_active(panel)
+        self._context_menu_at(pos, extendido)
+
+    def _context_menu_at(self, pos, extendido: bool) -> None:
+        """El del shell si se puede; si no, el propio."""
+        if not self._shell_context_menu(pos, extendido):
+            self._own_context_menu(pos)
+
+    def _shell_context_menu(self, pos, extendido: bool) -> bool:
+        """El menú real del sistema, con todas las extensiones instaladas.
+
+        Devuelve False cuando no corresponde —otro sistema operativo, apagado
+        por configuración, adentro de un ZIP, vista de rama— y entonces se usa
+        el menú propio.
+        """
+        if winshell is None:
+            return False
+        if not config.get_bool("general", "shell_context_menu", True):
+            return False
+        if self.active.in_archive:
+            return False
+
+        paths = [e.path for e in self.active.selected_entries() if not e.is_parent]
+        if not paths:
+            paths = [self.active.path]          # el menú del directorio actual
+        if not winshell.context_menu_disponible(paths):
+            return False
+
+        # Win32 habla en píxeles físicos y Qt en lógicos: en una pantalla
+        # escalada al 150% el menú aparecería corrido sin esta conversión.
+        ventana = self.windowHandle()
+        dpr = ventana.devicePixelRatio() if ventana else 1.0
+        try:
+            mostrado = winshell.show_context_menu(
+                int(self.winId()), paths,
+                int(pos.x() * dpr), int(pos.y() * dpr),
+                extended=extendido,
+                instalar_filtro=winshell.instalar_filtro_qt)
+        except OSError:
+            return False
+
+        if mostrado:
+            # Una extensión del shell pudo crear, borrar o renombrar algo.
+            for panel in (self.left, self.right):
+                panel.reload(restore_cursor=True)
+        return mostrado
+
+    def _own_context_menu(self, pos) -> None:
+        """El de respaldo: comandos de MC, para cuando el del sistema no va."""
         entries = self.active.selected_entries()
         menu = QMenu(self)
         if entries:
-            menu.addAction("Abrir", lambda: self.run("cm_Return"))
-            menu.addAction("Ver (F3)", lambda: self.run("cm_List"))
-            menu.addAction("Editar (F4)", lambda: self.run("cm_Edit"))
+            menu.addAction(t("Abrir"), lambda: self.run("cm_Return"))
+            menu.addAction(t("Ver (F3)"), lambda: self.run("cm_List"))
+            menu.addAction(t("Editar (F4)"), lambda: self.run("cm_Edit"))
             menu.addSeparator()
-            menu.addAction("Copiar (F5)", lambda: self.run("cm_Copy"))
-            menu.addAction("Mover (F6)", lambda: self.run("cm_RenMov"))
-            menu.addAction("Renombrar (Shift+F6)", lambda: self.run("cm_RenameOnly"))
-            menu.addAction("Borrar (F8)", lambda: self.run("cm_Delete"))
+            menu.addAction(t("Copiar (F5)"), lambda: self.run("cm_Copy"))
+            menu.addAction(t("Mover (F6)"), lambda: self.run("cm_RenMov"))
+            menu.addAction(t("Renombrar (Shift+F6)"), lambda: self.run("cm_RenameOnly"))
+            menu.addAction(t("Borrar (F8)"), lambda: self.run("cm_Delete"))
             menu.addSeparator()
-            menu.addAction("Copiar al portapapeles", lambda: self.run("cm_CopyToClipboard"))
-            menu.addAction("Copiar ruta completa", lambda: self.run("cm_CopyFullNamesToClip"))
+            menu.addAction(t("Copiar al portapapeles"), lambda: self.run("cm_CopyToClipboard"))
+            menu.addAction(t("Copiar ruta completa"), lambda: self.run("cm_CopyFullNamesToClip"))
             menu.addSeparator()
-            menu.addAction("Propiedades", lambda: self.run("cm_Properties"))
+            menu.addAction(t("Propiedades"), lambda: self.run("cm_Properties"))
             menu.addSeparator()
-        menu.addAction("Pegar", lambda: self.run("cm_PasteFromClipboard"))
-        menu.addAction("Abrir en el Explorador", lambda: self.run("cm_OpenInExplorer"))
-        menu.addAction("Agregar a marcadores",
+        menu.addAction(t("Pegar"), lambda: self.run("cm_PasteFromClipboard"))
+        menu.addAction(t("Abrir en el Explorador"), lambda: self.run("cm_OpenInExplorer"))
+        menu.addAction(t("Agregar a marcadores"),
                        lambda: add_bookmark(os.path.basename(self.active.path)
                                             or self.active.path, self.active.path))
-        rect = self.active.view.visualRect(self.active.view.currentIndex())
-        menu.exec(self.active.view.viewport().mapToGlobal(rect.bottomLeft()))
+        menu.exec(pos)
 
     def cmd_open_terminal(self) -> None:
         try:
@@ -1149,6 +1251,25 @@ class MainWindow(QMainWindow):
         new = not config.get_bool("general", "delete_to_recycle", True)
         config.set("general", "delete_to_recycle", 1 if new else 0)
         self.act_recycle.setChecked(new)
+
+    def cmd_toggle_shell_menu(self) -> None:
+        nuevo = not config.get_bool("general", "shell_context_menu", True)
+        config.set("general", "shell_context_menu", 1 if nuevo else 0)
+        if hasattr(self, "act_shell_menu"):
+            self.act_shell_menu.setChecked(nuevo)
+
+    def cmd_set_drive_bar(self, modo: str) -> None:
+        config.set("general", "drive_bar", modo)
+        self._apply_drive_bar_mode(modo)
+        for a in self._drive_group.actions():
+            a.setChecked(a.data() == modo)
+
+    def cmd_cycle_drive_bar(self) -> None:
+        orden = ["dos", "una", "no"]
+        actual = config.get("general", "drive_bar", "dos")
+        siguiente = orden[(orden.index(actual) + 1) % len(orden)] \
+            if actual in orden else "dos"
+        self.cmd_set_drive_bar(siguiente)
 
     def cmd_choose_editor(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

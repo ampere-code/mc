@@ -5,8 +5,11 @@ commander; lo que queda es casi todo periferia, pero no toda la periferia vale
 lo mismo. Este documento ordena por **cuánto cambia el uso diario dividido por
 lo que cuesta**, no por categoría de Total Commander.
 
-Estado actual: 90 comandos `cm_*`, 16 módulos, ~6.100 líneas. Verificado en
+Estado actual: 92 comandos `cm_*`, 18 módulos, ~6.700 líneas. Verificado en
 Windows y Linux; macOS sin probar.
+
+Las etapas 3, 4 y 5 **ya están hechas**: quedan acá, marcadas, porque dejan
+escrito por qué se hizo cada cosa como se hizo y en qué se apartó del plan.
 
 ## Cómo leer las etapas
 
@@ -93,7 +96,84 @@ validar que la interfaz de backend está bien dibujada.
 
 ---
 
-## Etapa 3 — Menú contextual real de Windows · M
+## Lo que se hizo en las etapas 3, 4 y 5
+
+Las tres están implementadas y verificadas. Lo que sigue es qué quedó distinto
+de lo planeado y por qué, que es lo único que un plan no puede anticipar.
+
+### `pywin32` quedó afuera: todo por `ctypes`
+
+El plan se inclinaba por `pywin32` para no escribir vtables COM a mano. Al
+llegar al momento de instalarlo pesaron más tres cosas: el proyecto tiene **una
+sola dependencia**, el ejecutable de Windows pesa 65 MB después de haberlo
+peleado bastante, y lo que hacía falta eran seis interfaces y unas pocas
+llamadas a cada una — no la biblioteca entera.
+
+`mc/winshell.py` las resuelve con un helper de nueve líneas, `_vcall`, que
+indexa la vtable. El módulo lanza `ImportError` a propósito fuera de Windows y
+quien lo usa decide qué hacer sin él.
+
+### El hilo de fondo para los iconos no era posible
+
+El plan decía "pedirlos en un hilo". No se puede: `QPixmap` no se puede tocar
+fuera del hilo de la interfaz, y el proveedor de iconos de Qt devuelve `QIcon`,
+que es pixmaps adentro.
+
+Lo que se hizo aprovecha algo que ya pasaba: **la vista sólo pide el icono de
+las filas que está por dibujar**, así que la cola nunca tiene más que una
+pantalla. Un temporizador la vacía en tandas de 12 ms y avisa al modelo, que
+repinta la columna. El efecto es el mismo que un hilo, sin el problema.
+
+### Y un bug de la misma familia, encontrado de paso
+
+Adentro de un ZIP las rutas no existen en el disco. Pedir el icono de una ruta
+inexistente devuelve cualquier cosa, y cacheada bajo la extensión a secas ese
+resultado pasaba a ser el icono de **todos** los archivos de ese tipo — el
+mismo bug que se estaba arreglando, por otra puerta. Las entradas de
+comprimido ahora van marcadas (`FileEntry.virtual`) y se cachean aparte.
+
+### La barra de estado no se enteraba del cursor
+
+Para mostrar el destino de un acceso directo hacía falta refrescar la barra al
+mover el cursor, y resultó que no se refrescaba nunca: las flechas las maneja
+`QTableView` por dentro y nadie avisaba. Ahora escucha `currentRowChanged`.
+
+Como eso multiplica las veces que se arma el texto, los totales del listado
+—archivos, carpetas, bytes— pasaron a calcularse una vez por lectura del
+directorio en lugar de recorrer todas las entradas en cada tecla.
+
+### Qué se verificó
+
+En Windows, con ventana real: el menú del Explorador abierto desde `Shift+F10`
+con 7-Zip, Notepad++, IntelliJ, WinRAR y Defender adentro; **el submenú "Enviar
+a" lleno**, que es la prueba de que el reenvío a `IContextMenu2` funciona y lo
+que falla cuando falta; cada programa con su icono; el destino de un acceso
+directo en la barra de estado; `Enter` sobre un acceso directo a carpeta
+navegando hasta ella; y las dos barras de unidades.
+
+En Linux, con ventana real bajo Xvfb y Python 3.10: las dos barras con los
+puntos de montaje, los enlaces simbólicos resueltos, y `mc.winshell` negándose
+a importarse como corresponde. El suite da 0 fallas en los dos sistemas.
+
+La comprobación de que dos programas se ven **distintos** sólo corre con el
+plugin de plataforma real: `offscreen` no tiene iconos del shell y devuelve uno
+genérico para todo. El suite lo omite y lo dice, en vez de dar una falla que no
+es del código. Para correr esa parte: `QT_QPA_PLATFORM=windows`.
+
+### Lo que no se hizo de estas tres etapas
+
+- **El menú compacto de Windows 11.** Se muestra el clásico, el de "Mostrar
+  más opciones", que es el completo. El nuevo usa `IExplorerCommand` y no se
+  consigue por esta vía; Total Commander se comporta igual.
+- **Columna con el destino del acceso directo.** El destino se ve en la barra
+  de estado; como columna depende de la etapa 9.
+- **El combo de unidad con etiqueta de volumen** al lado de cada barra. Están
+  los botones y el espacio libre; `Alt+F1` y `Alt+F2` siguen dando el menú de
+  unidades por panel.
+
+---
+
+## Etapa 3 — Menú contextual real de Windows · M · ✅ hecha
 
 Hoy `Shift+F10` abre un menú **propio**, armado a mano en Qt con comandos de MC
 (`mainwindow.py:1046`). Total Commander abre el menú real del Explorador, con
@@ -101,7 +181,7 @@ todo lo que el usuario tenga instalado: 7-Zip, "Abrir con", "Enviar a", Git
 Bash, TortoiseGit, el antivirus. Es la diferencia entre un menú de catorce
 entradas fijas y uno que crece con la máquina.
 
-**Qué construir.** Un módulo `mc/shellmenu.py`, sólo Windows, que hable COM con
+**Qué construir.** Un módulo `mc/winshell.py`, sólo Windows, que hable COM con
 el shell. La secuencia es conocida:
 
 1. `SHParseDisplayName` para conseguir el PIDL de cada archivo, y
@@ -156,7 +236,7 @@ agregar las claves al catálogo `EN`.
 
 ---
 
-## Etapa 4 — Iconos por archivo y accesos directos · S
+## Etapa 4 — Iconos por archivo y accesos directos · S · ✅ hecha
 
 Dos síntomas, una causa. `fsmodel.py:33` cachea los iconos **por extensión**:
 
@@ -202,7 +282,7 @@ listaba con `follow_symlinks=False`; marcarlos con una flecha y resolverlos con
 
 ---
 
-## Etapa 5 — Barra de unidades en cada panel · S
+## Etapa 5 — Barra de unidades en cada panel · S · ✅ hecha
 
 Hoy hay **una sola** barra de unidades, arriba de todo, y actúa sobre el panel
 activo (`mainwindow.py:99`). Eso obliga a mirar cuál panel tiene el foco antes
@@ -441,25 +521,25 @@ anda en versiones nuevas.
 ## Orden sugerido
 
 ```
-1 config  →  2 comprimidos
-                                 ┌─ 3 menú contextual ─┐
-   integración con Windows ──────┼─ 4 iconos y .lnk    ├──→  9 columnas
-                                 └─ 5 barra de unidades┘          ↓
-                                                         10 teclas y botones
-6 multi-rename  →  7 sincronizar  →  8 diff
+✅ 3 menú contextual   ✅ 4 iconos y .lnk   ✅ 5 barra de unidades
+
+1 config  →  2 comprimidos                              9 columnas
+                                                             ↓
+6 multi-rename  →  7 sincronizar  →  8 diff      10 teclas y botones
 
 11 herramientas sueltas: en cualquier momento
 12 macOS: cuando haya una Mac        13 lo grande: por ahora no
 ```
 
-Las etapas 1 a 8 son independientes entre sí y cada una se puede soltar
-terminada.
-
-Las tres de integración con Windows —3, 4 y 5— conviene hacerlas en ese orden
-aunque sean independientes: las tres tocan Win32, y el
-`QAbstractNativeEventFilter` que hace falta para los submenús del menú
-contextual es el mismo que después escucha `WM_DEVICECHANGE` para refrescar las
-unidades. La 4 es la más barata de las tres y la que más se nota por día.
+Las etapas 1, 2, 6, 7 y 8 son independientes entre sí y cada una se puede
+soltar terminada.
 
 La 9 y la 10 conviene hacerlas juntas porque las dos mueven configuración al
-ini. La 11 se puede intercalar en cualquier momento.
+ini; además la 9 habilita mostrar el destino de un acceso directo como columna,
+que es lo único que quedó pendiente de la etapa 4. La 11 se puede intercalar en
+cualquier momento.
+
+**Lo siguiente más barato es la 1.** Ahora tiene más para mostrar que antes:
+las etapas 3 y 5 agregaron dos claves al ini —`shell_context_menu` y
+`drive_bar`— que ya tienen su entrada en el menú, pero el resto sigue
+editándose a mano.

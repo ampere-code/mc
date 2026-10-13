@@ -127,6 +127,7 @@ Lo dibuja vectorialmente a cada tamaño y escribe `mc/resources/icon.ico`.
 | `mc/mainwindow.py` | Ventana, menú, registro de comandos, atajos, línea de comandos |
 | `mc/panel.py` | Un panel: pestañas, ruta, historial, marcado, navegación |
 | `mc/fsmodel.py` | Listado de directorios y modelo de tabla |
+| `mc/icons.py` | Iconos: por tipo para casi todo, por archivo para `.exe` y `.lnk` |
 | `mc/ops.py` | Copiar, mover y borrar en hilos, con progreso y papelera |
 | `mc/archive.py` | ZIP: comprimir, descomprimir, navegar adentro, verificar |
 | `mc/search.py` | Buscar archivos por nombre y contenido |
@@ -137,6 +138,7 @@ Lo dibuja vectorialmente a cada tamaño y escribe `mc/resources/icon.ico`.
 | `mc/bookmarks.py` | Marcadores de directorios |
 | `mc/theme.py` | Temas claro y oscuro: paleta, hoja QSS y barra de título |
 | `mc/platform.py` | Todo lo que cambia entre Windows, Linux y macOS |
+| `mc/winshell.py` | Sólo Windows: menú contextual del Explorador y accesos directos |
 | `mc/i18n.py` | Catálogo de traducción y selección de idioma |
 | `mc/help.py` | Tabla de atajos para F1 |
 | `mc/config.py` | Lectura y escritura del `mc.ini` |
@@ -155,6 +157,24 @@ un comando nuevo es agregar una fila ahí y, si querés, una línea en
 una con su ruta, marcas, cursor, orden e historial propios. Pestañas bloqueables.
 El panel con foco es el **origen** y se ve resaltado; el otro es el **destino**.
 `Ctrl+U` los intercambia, `Alt+Enter` muestra propiedades.
+
+**Barra de unidades por panel.** Cada panel tiene la suya, con las unidades y el
+espacio libre de *su* lado: no hay que mirar cuál tiene el foco antes de hacer
+clic. En *Configuración → Apariencia → Barra de unidades* se puede volver a una
+sola barra arriba, o esconderla. En Windows se refresca sola al enchufar o
+sacar un disco.
+
+**Menú contextual del sistema.** `Shift+F10` o clic derecho abren, en Windows,
+el menú real del Explorador: 7-Zip, "Abrir con", "Enviar a", lo que haya
+instalado. Con Shift aparecen los verbos extendidos, igual que en el
+Explorador. Se puede apagar desde *Configuración*, y entonces —o en Linux y
+macOS— sale un menú propio con los comandos de MC. Adentro de un comprimido
+siempre sale el propio.
+
+**Iconos y accesos directos.** Cada programa muestra su icono y cada acceso
+directo el de su destino con la flecha encima. Pararse sobre un `.lnk` muestra
+adónde apunta en la barra de estado, y `Enter` navega hasta ahí si es una
+carpeta. En Linux y macOS vale lo mismo para los enlaces simbólicos.
 
 **Navegación.** `Tab` cambia de panel, `Backspace` sube, `Ctrl+\` va a la raíz,
 `Alt+←/→` es el historial, `Ctrl+←/→` abre el directorio del cursor en el otro
@@ -268,12 +288,10 @@ personalizadas, sincronización de carpetas, renombrado masivo, comparación de
 archivos por contenido, diálogo de configuración, y comprimidos que no sean ZIP
 (RAR, 7z, TAR).
 
-En Windows, además: `Shift+F10` abre un menú propio y no el del Explorador, así
-que no aparecen 7-Zip, "Enviar a" ni el resto de las extensiones del shell; los
-iconos se cachean por extensión, de modo que todos los `.exe` y todos los `.lnk`
-comparten uno solo, y los accesos directos no muestran su flecha ni siguen al
-destino; y la barra de unidades es una sola, sobre el panel activo, en vez de
-una por panel.
+En Windows 11 el menú contextual que se muestra es el **clásico** —el de
+"Mostrar más opciones"—, que es el completo. El compacto nuevo usa
+`IExplorerCommand` y no se consigue por esta vía; Total Commander se comporta
+igual.
 
 En `SPEC.md` está el detalle de qué categorías de comandos de TC se cubrieron y
 cuáles no, y en **`ROADMAP.md`** el plan para seguir construyendo: qué falta, en
@@ -306,11 +324,14 @@ arriba). Lo más útil:
 | `delete_to_recycle` | `1` | F8 a la papelera en vez de borrar definitivo |
 | `show_hidden` | `0` | Mostrar archivos ocultos y de sistema |
 | `sort_dirs_first` | `1` | Carpetas antes que archivos |
+| `drive_bar` | `dos` | `dos` (una por panel), `una` (arriba) o `no` |
+| `shell_context_menu` | `1` | Sólo Windows: usar el menú del Explorador |
 | `font_family`, `font_size` | según el sistema | Fuente monoespaciada de las listas |
 
 Las rutas de los paneles, el tamaño de la ventana y la posición del divisor se
 guardan al salir.
 
-El tema, el idioma, la papelera y el editor se cambian desde el menú
-*Configuración*. El resto, por ahora, editando el ini a mano: el diálogo de
-configuración es la etapa 1 de `ROADMAP.md`.
+El tema, el idioma, la papelera, el editor, la barra de unidades y el menú
+contextual se cambian desde el menú *Configuración*. El resto, por ahora,
+editando el ini a mano: el diálogo de configuración es la etapa 1 de
+`ROADMAP.md`.

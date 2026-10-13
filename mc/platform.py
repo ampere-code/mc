@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 IS_WINDOWS = sys.platform == "win32"
@@ -83,6 +84,62 @@ def open_with_default_app(path: str) -> None:
         subprocess.Popen(["open", path])
     else:
         subprocess.Popen(["xdg-open", path])
+
+
+# --- enlaces y accesos directos -----------------------------------------
+
+@lru_cache(maxsize=512)
+def _link_target(path: str, _mtime: float) -> str | None:
+    if IS_WINDOWS:
+        if not path.lower().endswith(".lnk"):
+            return None
+        try:
+            from . import winshell
+        except ImportError:                                 # pragma: no cover
+            return None
+        return winshell.resolve_shortcut(path)
+    try:
+        if os.path.islink(path):
+            return os.path.realpath(path)
+    except OSError:
+        pass
+    return None
+
+
+def link_target(path: str) -> str | None:
+    """Destino de un acceso directo o enlace simbólico, o None si no lo es.
+
+    En Windows son los `.lnk`, que hay que abrir con el shell; en Unix son los
+    symlinks, que salen con una llamada.
+
+    Se cachea por ruta y fecha porque la barra de estado lo pregunta en cada
+    movimiento del cursor, y abrir COM para resolver un `.lnk` cuesta bastante
+    más que un `stat`. La fecha en la clave hace que apuntar el acceso directo
+    a otro lado invalide lo cacheado.
+    """
+    # Descartar por el nombre antes de tocar el disco: la inmensa mayoría de
+    # los archivos sobre los que pasa el cursor no son accesos directos.
+    if IS_WINDOWS and not path.lower().endswith(".lnk"):
+        return None
+    try:
+        return _link_target(path, os.path.getmtime(path))
+    except OSError:
+        return None
+
+
+def per_file_icon_extensions() -> set[str]:
+    """Extensiones cuyo icono vive adentro del archivo, no en el tipo.
+
+    Para el resto alcanza con un icono por extensión, que es lo que hace
+    liviano listar un directorio con miles de archivos. Para éstas no: dos
+    `.exe` distintos tienen iconos distintos, y usar el del primero es el bug
+    que hacía que todos los programas se vieran iguales.
+    """
+    if IS_WINDOWS:
+        return {"exe", "lnk", "ico", "cur", "url", "msc", "cpl", "scr"}
+    if IS_MACOS:
+        return {"app", "icns"}
+    return {"desktop"}
 
 
 def reveal_in_file_manager(path: str) -> None:

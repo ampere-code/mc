@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -252,7 +253,176 @@ check("ventana construida", w.isVisible())
 check("comandos registrados", len(w.commands) >= 85, len(w.commands))
 w.cmd_set_theme("light")
 check("cambia de tema en caliente", theme.current().name == "light")
+
+print("\n[14b] barra de unidades por panel")
+w.cmd_set_drive_bar("dos")
+check("modo dos: una barra en cada panel",
+      w.left.drive_bar.isVisible() and w.right.drive_bar.isVisible()
+      and not w.drive_bar.isVisible())
+check("cada barra tiene botones", len(w.left.drive_bar.buttons) > 0,
+      len(w.left.drive_bar.buttons))
+check("cada barra muestra su espacio libre", bool(w.left.drive_bar.info.text()),
+      w.left.drive_bar.info.text())
+w.cmd_set_drive_bar("una")
+check("modo una: sólo la de arriba",
+      w.drive_bar.isVisible() and not w.left.drive_bar.isVisible())
+w.cmd_set_drive_bar("no")
+check("modo no: ninguna",
+      not w.drive_bar.isVisible() and not w.left.drive_bar.isVisible())
+w.cmd_set_drive_bar("dos")
+# El punto de tener dos barras es que cada una manda sobre SU panel y no sobre
+# el que está activo, que es la duda que obligaba a mirar el foco antes de
+# hacer clic. Se prueba con el panel izquierdo activo y tocando la barra del
+# derecho: tiene que moverse el derecho y quedarse quieto el izquierdo.
+w.left.set_path(os.path.expanduser("~"))
+w._set_active(w.left)
+izq_antes = w.left.path
+w.right.drive_bar.drive_clicked.emit(root)
+check("la barra derecha mueve el panel derecho",
+      os.path.normcase(w.right.path) == os.path.normcase(os.path.abspath(root)),
+      w.right.path)
+check("la barra derecha no toca el panel izquierdo",
+      w.left.path == izq_antes, f"{izq_antes} -> {w.left.path}")
 w.close()
+
+print("\n[14c] iconos: por tipo o por archivo según corresponda")
+import hashlib  # noqa: E402
+
+from PySide6.QtCore import QBuffer, QByteArray  # noqa: E402
+
+from mc import icons  # noqa: E402
+from mc.fsmodel import FileEntry, icon_for  # noqa: E402
+
+
+def huella_icono(icon) -> str:
+    """Identifica el dibujo, no el objeto: dos QIcon distintos pueden pintar
+    lo mismo, y lo que importa acá es si el usuario los ve iguales."""
+    pm = icon.pixmap(16, 16)
+    if pm.isNull():
+        return "nulo"
+    ba = QByteArray()
+    buf = QBuffer(ba)                   # el QByteArray en una variable: si es
+    buf.open(QBuffer.WriteOnly)         # temporal, se libera y Qt revienta
+    pm.save(buf, "PNG")
+    buf.close()
+    return hashlib.sha256(bytes(ba)).hexdigest()[:12]
+
+
+cache = icons.cache()
+check("las extensiones con icono propio están declaradas",
+      cache.lleva_icono_propio("exe") or not platform.IS_WINDOWS)
+check("una extensión común no lleva icono propio",
+      not cache.lleva_icono_propio("txt"))
+check("la clave distingue versiones del mismo archivo",
+      icons.IconCache.clave("a", 1.0) != icons.IconCache.clave("a", 2.0))
+
+# Archivos de texto distintos tienen que compartir icono: es lo que hace
+# liviano listar un directorio grande.
+comunes = []
+for i in range(3):
+    fp = os.path.join(root, f"icono_{i}.txt")
+    write(fp, b"x")
+    comunes.append(FileEntry(name=os.path.basename(fp), path=fp,
+                             mtime=os.path.getmtime(fp)))
+check("los archivos del mismo tipo comparten icono",
+      len({huella_icono(icon_for(e)) for e in comunes}) == 1)
+
+# Una entrada de adentro de un ZIP no existe en el disco: no tiene que pisar
+# el icono bueno del tipo en el caché.
+icono_real_txt = huella_icono(icon_for(comunes[0]))
+icon_for(FileEntry(name="x.txt", path="carpeta_que_no_existe/x.txt", virtual=True))
+check("una entrada virtual no pisa el icono del tipo",
+      huella_icono(icon_for(comunes[0])) == icono_real_txt)
+
+if platform.IS_WINDOWS:
+    # Y los que llevan el icono adentro, no. Éste era el bug: el caché por
+    # extensión hacía que el primer .exe le prestara el icono a todos.
+    propios = [r"C:\Windows\System32\notepad.exe",
+               r"C:\Windows\System32\mspaint.exe",
+               r"C:\Windows\explorer.exe"]
+    propios = [p for p in propios if os.path.exists(p)]
+    ents = [FileEntry(name=os.path.basename(p), path=p, mtime=os.path.getmtime(p))
+            for p in propios]
+    for e in ents:                      # primera pasada: encola
+        icon_for(e)
+    deadline = time.time() + 5
+    while time.time() < deadline and cache._pendientes:
+        app.processEvents()
+
+    # El mecanismo se puede comprobar en cualquier lado: una entrada de caché
+    # por archivo y no una por extensión.
+    claves = {icons.IconCache.clave(e.path, e.mtime) for e in ents}
+    check("cada programa tiene su propia entrada en el caché",
+          claves <= set(cache._por_archivo) and len(claves) == len(ents),
+          f"{len(claves)} clave(s)")
+
+    # Que además se vean distintos depende del shell, y el plugin `offscreen`
+    # no lo tiene: ahí Qt devuelve un icono genérico para todo. Comprobarlo
+    # igual daría una falla que no es del código.
+    distintos = {huella_icono(icon_for(e)) for e in ents}
+    if app.platformName() == "offscreen":
+        print(f"  omit  cada programa muestra su propio icono "
+              f"(plugin offscreen: sin iconos del shell; {len(distintos)} distinto(s))")
+    else:
+        check("cada programa muestra su propio icono",
+              len(distintos) == len(ents), f"{len(distintos)} de {len(ents)}")
+
+print("\n[14d] accesos directos y menú contextual")
+check("un archivo común no es un acceso directo",
+      platform.link_target(os.path.join(root, "icono_0.txt")) is None)
+check("una ruta inexistente no revienta",
+      platform.link_target(os.path.join(root, "no_existe.lnk")) is None)
+
+if platform.IS_WINDOWS:
+    from mc import winshell  # noqa: E402
+
+    check("el menú del shell acepta archivos de una misma carpeta",
+          winshell.context_menu_disponible(
+              [os.path.join(root, f"icono_{i}.txt") for i in range(3)]))
+    check("y lo rechaza si están en carpetas distintas",
+          not winshell.context_menu_disponible(
+              [os.path.join(root, "icono_0.txt"), r"C:\Windows\explorer.exe"]))
+    check("lo rechaza si no existen",
+          not winshell.context_menu_disponible([os.path.join(root, "fantasma")]))
+    check("lo rechaza con la lista vacía",
+          not winshell.context_menu_disponible([]))
+    # Un .lnk de verdad, creado con el shell, tiene que resolverse.
+    lnk = os.path.join(root, "prueba.lnk")
+    hecho = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');"
+         f"$s.TargetPath='{root}';$s.Save()"],
+        capture_output=True, timeout=60).returncode == 0
+    if hecho and os.path.exists(lnk):
+        destino = platform.link_target(lnk)
+        check("resuelve el destino de un acceso directo",
+              destino is not None
+              and os.path.normcase(destino) == os.path.normcase(root), destino)
+        check("y sabe que apunta a una carpeta",
+              destino is not None and os.path.isdir(destino))
+else:
+    # Fuera de Windows el módulo del shell no tiene que ni importarse: el
+    # `ctypes.wintypes` que usa adentro revienta al cargarse en Linux.
+    try:
+        from mc import winshell  # noqa: F401
+        check("mc.winshell no se importa fuera de Windows", False)
+    except ImportError:
+        check("mc.winshell no se importa fuera de Windows", True)
+    from mc.mainwindow import winshell as ws_en_ventana  # noqa: E402
+    check("la ventana funciona sin él", ws_en_ventana is None)
+
+    # El equivalente de un acceso directo son los enlaces simbólicos.
+    enlace = os.path.join(root, "enlace_a_la_carpeta")
+    try:
+        os.symlink(root, enlace)
+        destino = platform.link_target(enlace)
+        check("resuelve un enlace simbólico",
+              destino is not None
+              and os.path.realpath(destino) == os.path.realpath(root), destino)
+        check("y sabe que apunta a una carpeta",
+              destino is not None and os.path.isdir(destino))
+    except (OSError, NotImplementedError) as exc:
+        print(f"  omit  resuelve un enlace simbólico (no se pudo crear: {exc})")
 
 print("\n[15] idiomas")
 import ast  # noqa: E402

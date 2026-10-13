@@ -36,6 +36,13 @@ DEFAULTS = {
         "language": "auto",
         "ui_font_family": default_ui_font(),
         "ui_font_size": "9",
+        # una | dos | no. 'dos' da una barra de unidades por panel, cada una
+        # atada a su lado; 'una' es la barra única arriba de la ventana.
+        "drive_bar": "dos",
+        # Sólo Windows: usar el menú contextual real del Explorador en vez del
+        # menú propio. Se puede apagar porque carga DLL de terceros en el
+        # proceso, y una extensión rota puede tumbar la aplicación.
+        "shell_context_menu": "1",
     },
     "geometry": {},
     "bookmarks": {},

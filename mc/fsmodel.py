@@ -15,10 +15,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPalette
-from PySide6.QtWidgets import QFileIconProvider, QStyle, QStyledItemDelegate
-from PySide6.QtCore import QFileInfo
+from PySide6.QtWidgets import QStyle, QStyledItemDelegate
 
-from . import platform, theme
+from . import icons, platform, theme
 from .i18n import t
 
 COL_NAME, COL_EXT, COL_SIZE, COL_DATE, COL_ATTR = range(5)
@@ -26,24 +25,24 @@ COLUMNS = ["Nombre", "Ext", "Tamaño", "Fecha", "Atr"]
 
 SORT_NAME, SORT_EXT, SORT_SIZE, SORT_DATE, SORT_NONE = range(5)
 
-_icon_provider = QFileIconProvider()
-_icon_cache: dict[str, QIcon] = {}
-
-
 def icon_for(entry: "FileEntry") -> QIcon:
-    """Icono del shell de Windows, cacheado por extensión."""
-    if entry.is_parent:
-        key = "<up>"
-    elif entry.is_dir:
-        key = "<dir>"
-    else:
-        key = entry.ext.lower() or "<file>"
-    if key not in _icon_cache:
-        if entry.is_dir or entry.is_parent:
-            _icon_cache[key] = _icon_provider.icon(QFileIconProvider.Folder)
-        else:
-            _icon_cache[key] = _icon_provider.icon(QFileInfo(entry.path))
-    return _icon_cache[key]
+    """Icono del archivo.
+
+    Por tipo para casi todo, y propio del archivo para los que llevan el icono
+    adentro —`.exe`, `.lnk`— porque si no todos los programas se ven iguales.
+    El detalle de las dos políticas está en `icons.py`.
+    """
+    cache = icons.cache()
+    if entry.is_dir or entry.is_parent:
+        return cache.folder_icon()
+    ext = entry.ext
+    if entry.virtual:
+        # Adentro de un comprimido no hay archivo que mirar.
+        return cache.por_tipo(ext, entry.path, real=False)
+    if cache.lleva_icono_propio(ext):
+        return cache.por_archivo(
+            icons.IconCache.clave(entry.path, entry.mtime), entry.path, ext)
+    return cache.por_tipo(ext, entry.path)
 
 
 @dataclass
@@ -57,6 +56,8 @@ class FileEntry:
     is_parent: bool = False
     # Para la vista de rama (Ctrl+B): ruta relativa a mostrar en vez del nombre.
     display: str | None = None
+    # La ruta no existe en el disco: es una entrada adentro de un comprimido.
+    virtual: bool = False
 
     @property
     def ext(self) -> str:
@@ -167,6 +168,9 @@ class FileListModel(QAbstractTableModel):
         self.sort_reverse = False
         self.dirs_first = True
         self.show_icons = True
+        # Los iconos propios de cada archivo llegan de a tandas; cuando una
+        # queda lista hay que repintar la columna de nombres.
+        icons.cache().batch_ready.connect(self._repintar_iconos)
 
     # --- datos ---------------------------------------------------------
 
@@ -180,6 +184,12 @@ class FileListModel(QAbstractTableModel):
             self.marked &= present
         self._apply_sort()
         self.endResetModel()
+
+    def _repintar_iconos(self) -> None:
+        if self.entries:
+            self.dataChanged.emit(self.index(0, COL_NAME),
+                                  self.index(len(self.entries) - 1, COL_NAME),
+                                  [Qt.DecorationRole])
 
     def entry(self, row: int) -> FileEntry | None:
         if 0 <= row < len(self.entries):
