@@ -266,9 +266,18 @@ escritorios; el `.trashinfo` que deja es lo que permite restaurar después.
 FTP, plugins (WCX/WFX/WLX), árbol de directorios separado, miniaturas, columnas
 personalizadas, sincronización de carpetas, renombrado masivo, comparación de
 archivos por contenido, diálogo de configuración, y comprimidos que no sean ZIP
-(RAR, 7z, TAR). En `SPEC.md` está el detalle de qué categorías de comandos de TC
-se cubrieron y cuáles no, y en **`ROADMAP.md`** el plan para seguir
-construyendo: qué falta, en qué orden conviene hacerlo y qué toca cada cosa.
+(RAR, 7z, TAR).
+
+En Windows, además: `Shift+F10` abre un menú propio y no el del Explorador, así
+que no aparecen 7-Zip, "Enviar a" ni el resto de las extensiones del shell; los
+iconos se cachean por extensión, de modo que todos los `.exe` y todos los `.lnk`
+comparten uno solo, y los accesos directos no muestran su flecha ni siguen al
+destino; y la barra de unidades es una sola, sobre el panel activo, en vez de
+una por panel.
+
+En `SPEC.md` está el detalle de qué categorías de comandos de TC se cubrieron y
+cuáles no, y en **`ROADMAP.md`** el plan para seguir construyendo: qué falta, en
+qué orden conviene hacerlo y qué toca cada cosa.
 
 **Linux** está verificado con ventana real: `tools/Dockerfile.linux-gui` levanta
 un servidor X virtual, Qt carga su plugin `xcb` y MC abre, lista directorios y

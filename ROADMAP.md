@@ -93,7 +93,144 @@ validar que la interfaz de backend está bien dibujada.
 
 ---
 
-## Etapa 3 — Renombrado masivo (Multi-Rename) · M
+## Etapa 3 — Menú contextual real de Windows · M
+
+Hoy `Shift+F10` abre un menú **propio**, armado a mano en Qt con comandos de MC
+(`mainwindow.py:1046`). Total Commander abre el menú real del Explorador, con
+todo lo que el usuario tenga instalado: 7-Zip, "Abrir con", "Enviar a", Git
+Bash, TortoiseGit, el antivirus. Es la diferencia entre un menú de catorce
+entradas fijas y uno que crece con la máquina.
+
+**Qué construir.** Un módulo `mc/shellmenu.py`, sólo Windows, que hable COM con
+el shell. La secuencia es conocida:
+
+1. `SHParseDisplayName` para conseguir el PIDL de cada archivo, y
+   `SHBindToParent` para llegar al `IShellFolder` que los contiene.
+2. `IShellFolder::GetUIObjectOf` con el arreglo de PIDL hijos pide un
+   `IContextMenu`.
+3. `CreatePopupMenu` y `IContextMenu::QueryContextMenu` lo llenan. Con la tecla
+   Shift apretada se agrega `CMF_EXTENDEDVERBS`, que es lo que descubre las
+   entradas ocultas igual que en el Explorador.
+4. `TrackPopupMenuEx` con `TPM_RETURNCMD` lo muestra y devuelve el id elegido.
+5. `IContextMenu::InvokeCommand` con `CMINVOKECOMMANDINFOEX` lo ejecuta.
+6. Recargar el panel: una extensión del shell pudo haber creado, borrado o
+   renombrado algo.
+
+**El paso que siempre se olvida.** Los submenús —"Enviar a", "Abrir con",
+"Nuevo"— y las entradas dibujadas por el propio plugin necesitan
+`IContextMenu2`/`IContextMenu3`: hay que reenviarles `WM_INITMENUPOPUP`,
+`WM_DRAWITEM`, `WM_MEASUREITEM` y `WM_MENUCHAR` a través de `HandleMenuMsg2`.
+En Qt eso es un `QAbstractNativeEventFilter` instalado mientras el menú está
+arriba y sacado después. Sin esto el menú aparece pero "Enviar a" sale vacío.
+
+**Lo que hay que cuidar.**
+
+- **Windows 11.** `IContextMenu` da el menú **clásico**, el mismo que se ve con
+  "Mostrar más opciones" o con `Shift+F10` en el Explorador. El menú compacto
+  nuevo usa `IExplorerCommand` y aplicaciones empaquetadas, y no se consigue
+  por esta vía. TC se comporta igual. Para este caso de uso el clásico es el
+  completo, así que no es una pérdida.
+- **Se cargan DLL de terceros dentro del proceso.** Una extensión del shell
+  rota puede colgar o tirar abajo MC. Es la misma exposición que tienen TC y el
+  propio Explorador. Conviene una clave `shell_context_menu` en el ini para
+  apagarlo y volver al menú actual, que queda como alternativa.
+- **COM.** `CoInitializeEx` en modo apartamento sobre el hilo principal, y
+  aceptar `RPC_E_CHANGED_MODE` como éxito: el proveedor de iconos de Qt ya
+  inicializó COM antes. Soltar siempre las interfaces y liberar los PIDL con
+  `CoTaskMemFree`; esto ya mordió una vez en este proyecto, porque `os._exit()`
+  revienta con `0xC0000005` si quedan hilos COM del shell vivos.
+- **Dónde no aplica.** Adentro de un ZIP y en la vista de rama (`Ctrl+B`) no
+  hay PIDL utilizables —o los archivos tienen padres distintos—, así que ahí
+  hay que caer al menú propio.
+
+**Decisión pendiente.** `ctypes` puro o `pywin32`. Hoy el proyecto tiene una
+sola dependencia y `platform.py` habla con Win32 por `ctypes` a mano, pero son
+llamadas a funciones sueltas; esto son interfaces COM con vtables, que a mano
+es bastante más código. `pywin32` trae `GetUIObjectOf` e `IContextMenu2` ya
+envueltos. Mi inclinación es `pywin32` como dependencia **sólo de Windows** en
+`requirements.txt`, y que el menú propio sea el camino de respaldo si no está.
+
+**De paso.** Las catorce cadenas del menú actual (`mainwindow.py:1050-1068`) no
+pasan por `t()`: en inglés siguen apareciendo en español. Hay que envolverlas y
+agregar las claves al catálogo `EN`.
+
+---
+
+## Etapa 4 — Iconos por archivo y accesos directos · S
+
+Dos síntomas, una causa. `fsmodel.py:33` cachea los iconos **por extensión**:
+
+```python
+key = entry.ext.lower() or "<file>"
+```
+
+Así, el primer `.exe` que se lista le presta su icono a todos los demás `.exe`,
+y lo mismo pasa con `.lnk` y `.ico`. Para la mayoría de las extensiones está
+bien y es lo que hace rápido el listado —un directorio con 5.000 `.txt` pide un
+solo icono al shell—, pero justo para los tipos que llevan su icono **adentro**
+el resultado es visiblemente incorrecto.
+
+Y los accesos directos además no se ven como tales: les falta la flecha
+superpuesta, y `Enter` sobre un `.lnk` no sigue al destino.
+
+**Qué construir.**
+
+1. **Un conjunto de extensiones que se cachean por ruta y no por extensión**:
+   `exe`, `lnk`, `ico`, `cur`, `url`, `msc`, `cpl`. Para esas, la clave del
+   caché es la ruta completa más la fecha de modificación. El caché se acota
+   con un LRU para que un directorio de 10.000 ejecutables no se coma la
+   memoria.
+2. **La flecha de acceso directo.** `SHGetFileInfo` con
+   `SHGFI_ICON | SHGFI_LINKOVERLAY` la devuelve ya compuesta por el shell, que
+   es mejor que dibujarla a mano porque respeta el tema y el DPI.
+3. **Seguir el acceso directo.** `IShellLink` + `IPersistFile::Load` resuelve el
+   destino. Si apunta a una carpeta, `Enter` navega ahí; si apunta a un archivo,
+   lo ejecuta. Es lo que hace TC y es la mitad de la utilidad de un `.lnk` en un
+   gestor de archivos.
+4. **Mostrar el destino.** En la barra de estado al pararse encima, y como
+   columna opcional cuando exista la etapa 9.
+
+**Lo que hay que cuidar.** Pedirle iconos al shell archivo por archivo es lento
+si se hace en el hilo de la interfaz: un directorio de red con cien `.exe`
+congela la ventana. La forma correcta es pedirlos en un hilo y que el modelo
+emita `dataChanged` cuando llegan, con un icono genérico mientras tanto.
+`SHGFI_USEFILEATTRIBUTES` sirve para el icono provisorio sin tocar el disco.
+
+En Linux el equivalente son los enlaces simbólicos, que `fsmodel.py:97` ya
+listaba con `follow_symlinks=False`; marcarlos con una flecha y resolverlos con
+`os.readlink` es el mismo trabajo y mucho más barato.
+
+---
+
+## Etapa 5 — Barra de unidades en cada panel · S
+
+Hoy hay **una sola** barra de unidades, arriba de todo, y actúa sobre el panel
+activo (`mainwindow.py:99`). Eso obliga a mirar cuál panel tiene el foco antes
+de hacer clic, que es exactamente la duda que la barra debería evitar. TC
+permite una barra por panel, cada una atada a su lado.
+
+**Qué construir.** Mover la construcción de la barra a `Panel`, de modo que
+cada una sepa a qué panel pertenece y no consulte `self.active`. Una clave
+`drive_bar` en el ini con tres valores: `una` (lo de hoy), `dos` (una por
+panel) y `no` (ocultarla), con su selector en el diálogo de la etapa 1.
+
+La barra por panel muestra además el espacio libre de **esa** unidad, no el de
+la activa, lo que hace que `_update_drive_info` deje de ser global.
+
+Conviene aprovechar y sumar lo que TC tiene al lado de cada barra: un combo con
+la letra, la etiqueta del volumen y el espacio libre. `Alt+F1` y `Alt+F2` ya
+abren ese menú de unidades para el panel izquierdo y el derecho
+(`cm_LeftOpenDrives` / `cm_RightOpenDrives`); el combo es la misma información
+siempre visible.
+
+**Lo que hay que cuidar.** Las unidades se enumeran una sola vez al arrancar
+(`platform.py:51`, `GetLogicalDrives`). Con dos barras se nota más que un pendrive
+enchufado después no aparece. La solución es escuchar `WM_DEVICECHANGE` en
+Windows —el mismo `QAbstractNativeEventFilter` de la etapa 3— y refrescar.
+
+---
+
+## Etapa 6 — Renombrado masivo (Multi-Rename) · M
 
 `Ctrl+M`. De lo más usado de TC y no tiene nada que ver con el resto: un módulo
 nuevo, `mc/multirename.py`, sin tocar casi nada de lo existente.
@@ -126,7 +263,7 @@ regular, y pasar a mayúsculas o minúsculas.
 
 ---
 
-## Etapa 4 — Sincronizar directorios · M
+## Etapa 7 — Sincronizar directorios · M
 
 Comparar dos árboles completos y copiar en ambos sentidos. Es el complemento
 natural de `Shift+F2`, que hoy compara **sólo el directorio actual** de cada
@@ -149,7 +286,7 @@ modelo propio sobre `QAbstractTableModel`, igual que `fsmodel.py`.
 
 ---
 
-## Etapa 5 — Comparar archivos por contenido · M
+## Etapa 8 — Comparar archivos por contenido · M
 
 Un visor de diferencias lado a lado. Hoy no hay nada: el visor muestra de a un
 archivo.
@@ -168,7 +305,7 @@ lado al otro, como hace TC. Primero que muestre bien; lo otro es otra etapa.
 
 ---
 
-## Etapa 6 — Columnas, vistas y miniaturas · L
+## Etapa 9 — Columnas, vistas y miniaturas · L
 
 Acá se toca una decisión de la v1: `fsmodel.py:25` tiene cinco columnas fijas
 —Nombre, Ext, Tamaño, Fecha, Atr— cableadas en el modelo, y `FileListModel`
@@ -191,7 +328,7 @@ guardado de configuración. Y las miniaturas meten un segundo widget de vista en
 
 ---
 
-## Etapa 7 — Que el usuario pueda cambiar las teclas y los botones · M
+## Etapa 10 — Que el usuario pueda cambiar las teclas y los botones · M
 
 Hoy la tabla de atajos vive en el código (`mainwindow.py:279`) y la barra de
 botones es fija.
@@ -214,7 +351,7 @@ serio.
 
 ---
 
-## Etapa 8 — Herramientas sueltas · S cada una
+## Etapa 11 — Herramientas sueltas · S cada una
 
 Independientes entre sí. Se pueden tomar de a una cuando haya ganas:
 
@@ -236,7 +373,7 @@ Independientes entre sí. Se pueden tomar de a una cuando haya ganas:
 
 ---
 
-## Etapa 9 — Probar macOS · S, pero necesita una Mac
+## Etapa 12 — Probar macOS · S, pero necesita una Mac
 
 El código tiene sus ramas escritas y nunca ejecutadas: `Library/Application
 Support`, `/Volumes`, `open`, `open -R`, Finder para la papelera, todo en
@@ -251,7 +388,7 @@ macOS no está probado.
 
 ---
 
-## Etapa 10 — Lo grande, si alguna vez · L
+## Etapa 13 — Lo grande, si alguna vez · L
 
 Lo que en `SPEC.md` figura como "no" y debería seguir figurando así hasta que
 haya una razón concreta:
@@ -304,13 +441,25 @@ anda en versiones nuevas.
 ## Orden sugerido
 
 ```
-1 config  →  2 comprimidos  →  3 multi-rename  →  4 sincronizar
-                                                       ↓
-                        8 herramientas sueltas  ←  5 diff
-                                 ↓
-                   6 columnas  →  7 teclas y botones
+1 config  →  2 comprimidos
+                                 ┌─ 3 menú contextual ─┐
+   integración con Windows ──────┼─ 4 iconos y .lnk    ├──→  9 columnas
+                                 └─ 5 barra de unidades┘          ↓
+                                                         10 teclas y botones
+6 multi-rename  →  7 sincronizar  →  8 diff
+
+11 herramientas sueltas: en cualquier momento
+12 macOS: cuando haya una Mac        13 lo grande: por ahora no
 ```
 
-Las etapas 1 a 5 son independientes entre sí y cada una se puede soltar
-terminada. La 6 y la 7 conviene hacerlas juntas porque las dos mueven
-configuración al ini. La 8 se puede intercalar en cualquier momento.
+Las etapas 1 a 8 son independientes entre sí y cada una se puede soltar
+terminada.
+
+Las tres de integración con Windows —3, 4 y 5— conviene hacerlas en ese orden
+aunque sean independientes: las tres tocan Win32, y el
+`QAbstractNativeEventFilter` que hace falta para los submenús del menú
+contextual es el mismo que después escucha `WM_DEVICECHANGE` para refrescar las
+unidades. La 4 es la más barata de las tres y la que más se nota por día.
+
+La 9 y la 10 conviene hacerlas juntas porque las dos mueven configuración al
+ini. La 11 se puede intercalar en cualquier momento.
