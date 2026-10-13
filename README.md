@@ -23,6 +23,43 @@ python -m mc ~/proyectos /mnt/backup
 
 Requiere Python 3.10+ y `pip install -r requirements.txt`.
 
+### Linux
+
+Qt trae sus propias bibliotecas, pero su plugin gráfico `xcb` se enlaza contra
+librerías del sistema que muchas instalaciones mínimas no tienen. Sin ellas MC
+arranca y falla con *"could not load the Qt platform plugin xcb"*.
+
+En Debian y Ubuntu:
+
+```sh
+sudo apt install python3-venv \
+  libgl1 libegl1 libdbus-1-3 libglib2.0-0 libfontconfig1 libfreetype6 \
+  libxkbcommon0 libxkbcommon-x11-0 libx11-6 libx11-xcb1 libxcb1 \
+  libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+  libxcb-randr0 libxcb-render0 libxcb-render-util0 libxcb-shape0 \
+  libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xkb1
+
+git clone git@github.com:ampere-code/mc.git && cd mc
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m mc
+```
+
+Esa lista no está copiada de ningún lado: sale de mirar con `ldd` qué le falta
+a `libqxcb.so`, y está verificada en un contenedor Debian. En Fedora o Arch los
+paquetes equivalentes existen con otros nombres (`libxcb`, `xcb-util-*`,
+`libxkbcommon-x11`), pero ahí no lo probé.
+
+Para encontrar qué falta en cualquier distro:
+
+```sh
+ldd "$(python -c 'import PySide6,os;print(os.path.dirname(PySide6.__file__))')"/Qt/plugins/platforms/libqxcb.so | grep 'not found'
+QT_DEBUG_PLUGINS=1 python -m mc        # por qué Qt rechaza un plugin
+```
+
+En Wayland, Qt usa igual `xcb` sobre XWayland por defecto, que es lo más
+probado. Para el plugin nativo: `QT_QPA_PLATFORM=wayland python -m mc`.
+
 ### Ejecutable sin instalar nada
 
 ```cmd
@@ -39,11 +76,17 @@ software, traducciones): sin eso el paquete pesa el doble.
 python tests/smoke.py
 ```
 
-Y en Linux, dentro de un contenedor:
+Y en Linux, dentro de un contenedor. Hay dos imágenes porque prueban cosas
+distintas: la primera corre la lógica con la plataforma `offscreen` de Qt, la
+segunda levanta un servidor X virtual para que Qt cargue su plugin `xcb` real,
+abra una ventana de verdad y guarde una captura.
 
 ```sh
 docker build -f tools/Dockerfile.linux-test -t mc-linux-test .
-docker run --rm -v "$PWD:/app" mc-linux-test
+docker run --rm -v "$PWD:/app" mc-linux-test          # 65 comprobaciones
+
+docker build -f tools/Dockerfile.linux-gui -t mc-linux-gui .
+docker run --rm -v "$PWD:/app" mc-linux-gui           # ventana real + captura
 ```
 
 ### Icono
@@ -200,11 +243,17 @@ personalizadas, sincronización de carpetas, y comprimidos que no sean ZIP (RAR,
 7z, TAR). En `SPEC.md` está el detalle de qué categorías de comandos de TC se
 cubrieron y cuáles no.
 
-Linux y macOS están verificados sólo hasta donde llegan las pruebas sin
-interfaz: Linux corre en CI dentro del contenedor y pasa las 65 verificaciones,
-pero **ninguno de los dos se probó con una ventana real**. Lo que más chance
-tiene de necesitar ajustes es el menú contextual y la detección de puntos de
-montaje en escritorios concretos.
+**Linux** está verificado con ventana real: `tools/Dockerfile.linux-gui` levanta
+un servidor X virtual, Qt carga su plugin `xcb` y MC abre, lista directorios y
+renderiza bien, con los permisos `rwx` en la columna *Atr* y los puntos de
+montaje en la barra de unidades. Más las 65 comprobaciones de lógica.
+
+**macOS no se probó en absoluto** — no tengo una máquina a mano. El código
+tiene sus ramas (`Library/Application Support`, `/Volumes`, `open`, `open -R`,
+Finder para la papelera), pero están escritas, no verificadas.
+
+Lo que más chance tiene de necesitar ajustes en cualquiera de los dos es el
+menú contextual y la detección de puntos de montaje en escritorios concretos.
 
 ## Configuración
 

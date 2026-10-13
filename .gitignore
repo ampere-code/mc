@@ -10,6 +10,7 @@ build.log
 
 # Salidas de pruebas
 smoke_out.txt
+linux_gui*.png
 .pytest_cache/
 
 # Entornos virtuales

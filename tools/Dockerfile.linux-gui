@@ -1,0 +1,40 @@
+# Imagen para probar la interfaz gráfica de MC en Linux, sin pantalla física.
+#
+#   docker build -f tools/Dockerfile.linux-gui -t mc-linux-gui .
+#   docker run --rm -v "$PWD:/app" mc-linux-gui
+#
+# A diferencia de Dockerfile.linux-test, que usa la plataforma offscreen, acá se
+# levanta un servidor X virtual (Xvfb) y Qt carga su plugin xcb de verdad. Es la
+# única forma de comprobar sin una máquina Linux que la ventana realmente abre.
+#
+# La lista de paquetes sale de mirar qué le falta a libqxcb.so con ldd; no es
+# una lista copiada de ningún lado.
+FROM python:3.12-slim
+
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+        libgl1 libegl1 libdbus-1-3 libglib2.0-0 \
+        libfontconfig1 libfreetype6 \
+        libxkbcommon0 libxkbcommon-x11-0 \
+        libx11-6 libx11-xcb1 libxcb1 \
+        libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+        libxcb-randr0 libxcb-render0 libxcb-render-util0 libxcb-shape0 \
+        libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xkb1 \
+        fonts-dejavu-core fonts-liberation2 \
+        xvfb xauth \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --quiet PySide6
+
+ENV QT_QPA_PLATFORM=xcb \
+    PYTHONUNBUFFERED=1 \
+    HOME=/root
+
+WORKDIR /app
+
+# Xvfb se arranca a mano en vez de con xvfb-run: el envoltorio se queda colgado
+# negociando la autorización del display dentro del contenedor, y acá no hace
+# falta nada de eso.
+ENV DISPLAY=:99
+CMD ["bash", "-c", \
+     "Xvfb :99 -screen 0 1400x900x24 >/tmp/xvfb.log 2>&1 & \
+      sleep 2 && exec python tools/gui_check.py ${OUT:-linux_gui.png}"]
