@@ -316,6 +316,17 @@ check("auto resuelve a un idioma soportado", i18n.resolve("auto") in i18n.LANGUA
       i18n.resolve("auto"))
 
 shutil.rmtree(root, ignore_errors=True)
+
+# Desarme explícito de los widgets antes de salir. Si se deja que el intérprete
+# los destruya en su propio orden al terminar, PySide6 puede liberar el
+# QApplication con widgets todavía vivos y el proceso muere con SIGSEGV: en
+# Python 3.12 el orden sale favorable y no se nota, pero en 3.10 el script
+# imprimía "FALLAS: 0" y devolvía 139.
+for _widget in (p, p2, w):
+    _widget.close()
+    _widget.deleteLater()
+app.processEvents()
+
 print("\n" + "=" * 54)
 print(f"FALLAS: {len(fails)}" + ("  ->  " + ", ".join(fails) if fails else "  (todo bien)"))
 

@@ -1169,14 +1169,19 @@ class MainWindow(QMainWindow):
     def cmd_about(self) -> None:
         from . import __version__
 
+        # El texto se arma afuera de la f-string a propósito: una expresión que
+        # ocupa varias líneas dentro de una f-string recién es válida en Python
+        # 3.12 (PEP 701), y MC apunta a 3.10+.
+        creditos = t(
+            "El modelo de interacción sigue la convención del género commander "
+            "(Norton Commander, 1986) y los nombres de comando y atajos siguen "
+            "la nomenclatura pública de Total Commander. La implementación es "
+            "propia.")
         QMessageBox.about(
             self, t("Acerca de {app}", app=APP_TITLE),
             f"<h3>{APP_TITLE} {__version__}</h3>"
             f"<p>{t('Gestor de archivos de doble panel.')}</p>"
-            f"<p>{t('El modelo de interacción sigue la convención del género '
-                    'commander (Norton Commander, 1986) y los nombres de comando '
-                    'y atajos siguen la nomenclatura pública de Total Commander. '
-                    'La implementación es propia.')}</p>"
+            f"<p>{creditos}</p>"
             f"<p>Python {sys.version.split()[0]} · PySide6 · {sys.platform}</p>")
 
     # --- línea de comandos --------------------------------------------------

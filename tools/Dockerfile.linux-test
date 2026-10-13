@@ -3,9 +3,18 @@
 #   docker build -f tools/Dockerfile.linux-test -t mc-linux-test .
 #   docker run --rm -v "$PWD:/app" mc-linux-test
 #
+# Por omisión usa la versión de Python **más vieja que MC dice soportar**, no la
+# más nueva: probar sólo con la última deja pasar construcciones que no existen
+# en las anteriores. Así se coló una expresión multilínea dentro de una f-string
+# (válida recién en 3.12, PEP 701) que rompía en Debian 12, que trae 3.11.
+#
+# Para probar con otra:
+#   docker build -f tools/Dockerfile.linux-test --build-arg PYTHON_VERSION=3.13 ...
+#
 # Qt necesita estas bibliotecas aun con la plataforma offscreen: no abre una
 # ventana, pero igual carga el stack gráfico para rasterizar y medir texto.
-FROM python:3.12-slim
+ARG PYTHON_VERSION=3.10
+FROM python:${PYTHON_VERSION}-slim
 
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         libgl1 \
