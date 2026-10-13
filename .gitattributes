@@ -1,0 +1,11 @@
+# Normalizar a LF en el repositorio: el proyecto se usa en Windows, Linux y mac,
+# y sin esto cada clon introduce diferencias de fin de línea en todo el árbol.
+* text=auto eol=lf
+
+# Los .cmd los interpreta el shell de Windows: necesitan CRLF sí o sí.
+*.cmd text eol=crlf
+
+# Binarios: que git no los toque.
+*.ico binary
+*.png binary
+*.zip binary

@@ -1,0 +1,29 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Empaquetado (PyInstaller). El .spec sí se versiona: está escrito a mano.
+build/
+dist/
+build.log
+
+# Salidas de pruebas
+smoke_out.txt
+.pytest_cache/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*~
+
+# Sistema operativo
+Thumbs.db
+desktop.ini
+.DS_Store
