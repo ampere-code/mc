@@ -264,9 +264,11 @@ escritorios; el `.trashinfo` que deja es lo que permite restaurar después.
 ## Lo que no hace
 
 FTP, plugins (WCX/WFX/WLX), árbol de directorios separado, miniaturas, columnas
-personalizadas, sincronización de carpetas, y comprimidos que no sean ZIP (RAR,
-7z, TAR). En `SPEC.md` está el detalle de qué categorías de comandos de TC se
-cubrieron y cuáles no.
+personalizadas, sincronización de carpetas, renombrado masivo, comparación de
+archivos por contenido, diálogo de configuración, y comprimidos que no sean ZIP
+(RAR, 7z, TAR). En `SPEC.md` está el detalle de qué categorías de comandos de TC
+se cubrieron y cuáles no, y en **`ROADMAP.md`** el plan para seguir
+construyendo: qué falta, en qué orden conviene hacerlo y qué toca cada cosa.
 
 **Linux** está verificado con ventana real: `tools/Dockerfile.linux-gui` levanta
 un servidor X virtual, Qt carga su plugin `xcb` y MC abre, lista directorios y
@@ -299,3 +301,7 @@ arriba). Lo más útil:
 
 Las rutas de los paneles, el tamaño de la ventana y la posición del divisor se
 guardan al salir.
+
+El tema, el idioma, la papelera y el editor se cambian desde el menú
+*Configuración*. El resto, por ahora, editando el ini a mano: el diálogo de
+configuración es la etapa 1 de `ROADMAP.md`.
