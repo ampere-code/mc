@@ -25,11 +25,35 @@ Requiere Python 3.10+ y `pip install -r requirements.txt`.
 
 ### Linux
 
+```sh
+git clone https://github.com/ampere-code/mc.git && cd mc
+./install.sh
+mc
+```
+
+`install.sh` hace cuatro cosas: instala las bibliotecas del sistema que el
+plugin gráfico de Qt necesita, arma el entorno virtual con PySide6, deja el
+comando `mc` en `~/.local/bin` y registra la aplicación en el menú del
+escritorio con su icono. No corre como root: usa `sudo` sólo para los paquetes.
+
+```sh
+./install.sh --no-deps      # saltear los paquetes del sistema
+./install.sh --uninstall    # deshacer (conserva el .venv)
+```
+
+Después, `mc.sh` es el equivalente de `mc.cmd` en Windows:
+
+```sh
+mc                          # desde el PATH, tras install.sh
+mc ~/proyectos /mnt/backup  # con rutas iniciales
+./mc.sh                     # sin depender del PATH
+```
+
+#### A mano, sin el instalador
+
 Qt trae sus propias bibliotecas, pero su plugin gráfico `xcb` se enlaza contra
 librerías del sistema que muchas instalaciones mínimas no tienen. Sin ellas MC
 arranca y falla con *"could not load the Qt platform plugin xcb"*.
-
-En Debian y Ubuntu:
 
 ```sh
 sudo apt install python3-venv \
@@ -39,16 +63,15 @@ sudo apt install python3-venv \
   libxcb-randr0 libxcb-render0 libxcb-render-util0 libxcb-shape0 \
   libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xkb1
 
-git clone git@github.com:ampere-code/mc.git && cd mc
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python -m mc
 ```
 
 Esa lista no está copiada de ningún lado: sale de mirar con `ldd` qué le falta
-a `libqxcb.so`, y está verificada en un contenedor Debian. En Fedora o Arch los
-paquetes equivalentes existen con otros nombres (`libxcb`, `xcb-util-*`,
-`libxkbcommon-x11`), pero ahí no lo probé.
+a `libqxcb.so`, y está verificada en un contenedor Debian. `install.sh` también
+contempla Fedora, openSUSE y Arch con los paquetes equivalentes, pero en esas
+distribuciones no está probado.
 
 Para encontrar qué falta en cualquier distro:
 
@@ -117,6 +140,8 @@ Lo dibuja vectorialmente a cada tamaño y escribe `mc/resources/icon.ico`.
 | `mc/i18n.py` | Catálogo de traducción y selección de idioma |
 | `mc/help.py` | Tabla de atajos para F1 |
 | `mc/config.py` | Lectura y escritura del `mc.ini` |
+| `install.sh` | Instalador para Linux: dependencias, venv, comando y menú |
+| `mc.sh` / `mc.cmd` | Lanzadores para Linux/macOS y para Windows |
 
 El centro de todo es `MainWindow.commands`: un diccionario que va del nombre
 `cm_*` a la función que lo ejecuta. El menú, la barra de teclas de función y los
